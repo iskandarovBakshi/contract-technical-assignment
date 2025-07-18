@@ -1,64 +1,103 @@
-const { expect } = require("chai");
-const { ethers } = require("hardhat");
+import { expect } from "chai";
+import { ethers } from "hardhat";
+import { Signer } from "ethers";
+import { FinancialPlatform, MockToken } from "../typechain-types";
 
+// --- Helper functions ---
+async function registerUser(
+  contract: FinancialPlatform,
+  user: Signer,
+  name: string,
+  email: string,
+  role: number
+) {
+  await contract.registerUser(await user.getAddress(), name, email, role);
+}
+
+async function createTransaction(
+  contract: FinancialPlatform,
+  from: Signer,
+  to: Signer,
+  amount: bigint,
+  description: string
+) {
+  await contract
+    .connect(from)
+    .createTransaction(await to.getAddress(), amount, description);
+}
+
+// --- Test suite ---
 describe("FinancialPlatform", function () {
-  let financialPlatform;
-  let mockToken;
-  let owner;
-  let user1, user2, user3, approver1;
-  let addrs;
+  let financialPlatform: FinancialPlatform;
+  let mockToken: MockToken;
+  let owner: Signer;
+  let user1: Signer, user2: Signer, user3: Signer, approver1: Signer;
+  let addrs: Signer[];
 
   beforeEach(async function () {
-    [owner, user1, user2, user3, approver1, ...addrs] = await ethers.getSigners();
+    const signers = await ethers.getSigners();
+    [owner, user1, user2, user3, approver1, ...addrs] = signers;
 
-    const FinancialPlatform = await ethers.getContractFactory("FinancialPlatform");
+    const FinancialPlatform = await ethers.getContractFactory(
+      "FinancialPlatform"
+    );
     const MockToken = await ethers.getContractFactory("MockToken");
 
     financialPlatform = await FinancialPlatform.deploy();
     mockToken = await MockToken.deploy("Platform Token", "PLT", 1000000);
 
-    // Register test users
-    await financialPlatform.registerUser(
-      await user1.getAddress(),
-      "John Manager",
-      "john.manager@company.com",
-      1 // Manager
-    );
-
-    await financialPlatform.registerUser(
-      await user2.getAddress(),
-      "Alice User",
-      "alice.user@company.com",
-      0 // Regular
-    );
-
-    await financialPlatform.registerUser(
-      await user3.getAddress(),
-      "Bob User",
-      "bob.user@company.com",
-      0 // Regular
-    );
-
-    await financialPlatform.registerUser(
-      await approver1.getAddress(),
-      "Sarah Approver",
-      "sarah.approver@company.com",
-      1 // Manager
-    );
+    // Register test users using a loop
+    const userInfos = [
+      {
+        user: user1,
+        name: "John Manager",
+        email: "john.manager@company.com",
+        role: 1,
+      },
+      {
+        user: user2,
+        name: "Alice User",
+        email: "alice.user@company.com",
+        role: 0,
+      },
+      { user: user3, name: "Bob User", email: "bob.user@company.com", role: 0 },
+      {
+        user: approver1,
+        name: "Sarah Approver",
+        email: "sarah.approver@company.com",
+        role: 1,
+      },
+    ];
+    for (const info of userInfos) {
+      await registerUser(
+        financialPlatform,
+        info.user,
+        info.name,
+        info.email,
+        info.role
+      );
+    }
   });
 
+  // --- Deployment ---
   describe("Deployment", function () {
     it("Should set the right owner", async function () {
-      expect(await financialPlatform.hasRole(await financialPlatform.DEFAULT_ADMIN_ROLE(), owner.address)).to.equal(true);
+      expect(
+        await financialPlatform.hasRole(
+          await financialPlatform.DEFAULT_ADMIN_ROLE(),
+          await owner.getAddress()
+        )
+      ).to.equal(true);
     });
 
     it("Should register deployer as admin user", async function () {
-      const user = await financialPlatform.getUser(owner.address);
+      const user = await financialPlatform.getUser(await owner.getAddress());
       expect(user.name).to.equal("Platform Admin");
       expect(user.role).to.equal(2); // Admin
     });
   });
 
+  // --- User Management ---
   describe("User Management", function () {
     it("Should register new users correctly", async function () {
       const user = await financialPlatform.getUser(await user1.getAddress());
@@ -87,16 +126,20 @@ describe("FinancialPlatform", function () {
 
     it("Should only allow admin to update user roles", async function () {
       await expect(
-        financialPlatform.connect(user1).updateUserRole(await user2.getAddress(), 1)
+        financialPlatform
+          .connect(user1)
+          .updateUserRole(await user2.getAddress(), 1)
       ).to.be.revertedWith("Admin role required");
     });
   });
 
+  // --- Transaction Management ---
   describe("Transaction Management", function () {
     beforeEach(async function () {
-      // Create a transaction
-      await financialPlatform.connect(user2).createTransaction(
-        await user3.getAddress(),
+      await createTransaction(
+        financialPlatform,
+        user2,
+        user3,
         ethers.parseEther("1000"),
         "Test transaction"
       );
@@ -113,44 +156,50 @@ describe("FinancialPlatform", function () {
 
     it("Should not allow non-registered users to create transactions", async function () {
       await expect(
-        financialPlatform.connect(addrs[0]).createTransaction(
-          await user3.getAddress(),
-          ethers.parseEther("1000"),
-          "Test transaction"
-        )
+        financialPlatform
+          .connect(addrs[0])
+          .createTransaction(
+            await user3.getAddress(),
+            ethers.parseEther("1000"),
+            "Test transaction"
+          )
       ).to.be.revertedWith("User not registered");
     });
 
     it("Should not allow zero amount transactions", async function () {
       await expect(
-        financialPlatform.connect(user2).createTransaction(
-          await user3.getAddress(),
-          0,
-          "Test transaction"
-        )
+        financialPlatform
+          .connect(user2)
+          .createTransaction(await user3.getAddress(), 0, "Test transaction")
       ).to.be.revertedWith("Amount must be greater than 0");
     });
 
     it("Should not allow transactions to zero address", async function () {
       await expect(
-        financialPlatform.connect(user2).createTransaction(
-          ethers.ZeroAddress,
-          ethers.parseEther("1000"),
-          "Test transaction"
-        )
+        financialPlatform
+          .connect(user2)
+          .createTransaction(
+            ethers.ZeroAddress,
+            ethers.parseEther("1000"),
+            "Test transaction"
+          )
       ).to.be.revertedWith("Invalid recipient address");
     });
   });
 
+  // --- Approval Workflow ---
   describe("Approval Workflow", function () {
     beforeEach(async function () {
-      // Create and request approval for a transaction
-      await financialPlatform.connect(user2).createTransaction(
-        await user3.getAddress(),
+      await createTransaction(
+        financialPlatform,
+        user2,
+        user3,
         ethers.parseEther("1000"),
         "Test transaction"
       );
-      await financialPlatform.connect(user2).requestApproval(1, "Need approval");
+      await financialPlatform
+        .connect(user2)
+        .requestApproval(1, "Need approval");
     });
 
     it("Should request approval correctly", async function () {
@@ -163,13 +212,17 @@ describe("FinancialPlatform", function () {
 
     it("Should only allow transaction owner to request approval", async function () {
       await expect(
-        financialPlatform.connect(user3).requestApproval(1, "Not my transaction")
+        financialPlatform
+          .connect(user3)
+          .requestApproval(1, "Not my transaction")
       ).to.be.revertedWith("Not transaction owner");
     });
 
     it("Should process approval correctly", async function () {
-      await financialPlatform.connect(approver1).processApproval(1, true, "Approved");
-      
+      await financialPlatform
+        .connect(approver1)
+        .processApproval(1, true, "Approved");
+
       const approval = await financialPlatform.getApproval(1);
       expect(approval.status).to.equal(1); // Approved
       expect(approval.approver).to.equal(await approver1.getAddress());
@@ -179,8 +232,10 @@ describe("FinancialPlatform", function () {
     });
 
     it("Should reject approval correctly", async function () {
-      await financialPlatform.connect(approver1).processApproval(1, false, "Rejected");
-      
+      await financialPlatform
+        .connect(approver1)
+        .processApproval(1, false, "Rejected");
+
       const approval = await financialPlatform.getApproval(1);
       expect(approval.status).to.equal(2); // Rejected
 
@@ -190,34 +245,45 @@ describe("FinancialPlatform", function () {
 
     it("Should only allow approvers to process approvals", async function () {
       await expect(
-        financialPlatform.connect(user3).processApproval(1, true, "Not authorized")
+        financialPlatform
+          .connect(user3)
+          .processApproval(1, true, "Not authorized")
       ).to.be.revertedWith("Not authorized");
     });
 
     it("Should not allow processing already processed approvals", async function () {
-      await financialPlatform.connect(approver1).processApproval(1, true, "Approved");
-      
+      await financialPlatform
+        .connect(approver1)
+        .processApproval(1, true, "Approved");
+
       await expect(
-        financialPlatform.connect(approver1).processApproval(1, false, "Already processed")
+        financialPlatform
+          .connect(approver1)
+          .processApproval(1, false, "Already processed")
       ).to.be.revertedWith("Approval already processed");
     });
   });
 
+  // --- Transaction Completion ---
   describe("Transaction Completion", function () {
     beforeEach(async function () {
-      // Create, request approval, and approve a transaction
-      await financialPlatform.connect(user2).createTransaction(
-        await user3.getAddress(),
+      await createTransaction(
+        financialPlatform,
+        user2,
+        user3,
         ethers.parseEther("1000"),
         "Test transaction"
       );
-      await financialPlatform.connect(user2).requestApproval(1, "Need approval");
-      await financialPlatform.connect(approver1).processApproval(1, true, "Approved");
+      await financialPlatform
+        .connect(user2)
+        .requestApproval(1, "Need approval");
+      await financialPlatform
+        .connect(approver1)
+        .processApproval(1, true, "Approved");
     });
 
     it("Should complete approved transactions", async function () {
       await financialPlatform.connect(user2).completeTransaction(1);
-      
       const transaction = await financialPlatform.getTransaction(1);
       expect(transaction.status).to.equal(2); // Completed
     });
@@ -229,41 +295,58 @@ describe("FinancialPlatform", function () {
     });
 
     it("Should not allow completing non-active transactions", async function () {
-      // Create another transaction without approval
-      await financialPlatform.connect(user2).createTransaction(
-        await user3.getAddress(),
+      await createTransaction(
+        financialPlatform,
+        user2,
+        user3,
         ethers.parseEther("500"),
         "Another transaction"
       );
-
       await expect(
         financialPlatform.connect(user2).completeTransaction(2)
       ).to.be.revertedWith("Transaction not active");
     });
   });
 
+  // --- Data Retrieval ---
   describe("Data Retrieval", function () {
     beforeEach(async function () {
-      // Create multiple transactions
-      await financialPlatform.connect(user2).createTransaction(
-        await user3.getAddress(),
-        ethers.parseEther("1000"),
-        "Transaction 1"
-      );
-      await financialPlatform.connect(user3).createTransaction(
-        await user2.getAddress(),
-        ethers.parseEther("500"),
-        "Transaction 2"
-      );
-      await financialPlatform.connect(user2).createTransaction(
-        await user1.getAddress(),
-        ethers.parseEther("2000"),
-        "Transaction 3"
-      );
+      // Create multiple transactions using a loop
+      const txInfos = [
+        {
+          from: user2,
+          to: user3,
+          amount: ethers.parseEther("1000"),
+          desc: "Transaction 1",
+        },
+        {
+          from: user3,
+          to: user2,
+          amount: ethers.parseEther("500"),
+          desc: "Transaction 2",
+        },
+        {
+          from: user2,
+          to: user1,
+          amount: ethers.parseEther("2000"),
+          desc: "Transaction 3",
+        },
+      ];
+      for (const tx of txInfos) {
+        await createTransaction(
+          financialPlatform,
+          tx.from,
+          tx.to,
+          tx.amount,
+          tx.desc
+        );
+      }
     });
 
     it("Should get user transactions correctly", async function () {
-      const userTransactions = await financialPlatform.getUserTransactions(await user2.getAddress());
+      const userTransactions = await financialPlatform.getUserTransactions(
+        await user2.getAddress()
+      );
       expect(userTransactions.length).to.equal(3); // 2 as sender, 1 as recipient
     });
 
@@ -276,25 +359,45 @@ describe("FinancialPlatform", function () {
     });
   });
 
+  // --- Pending Approvals ---
   describe("Pending Approvals", function () {
     beforeEach(async function () {
-      // Create transactions and request approvals
-      await financialPlatform.connect(user2).createTransaction(
-        await user3.getAddress(),
-        ethers.parseEther("1000"),
-        "Transaction 1"
-      );
-      await financialPlatform.connect(user2).requestApproval(1, "Approval 1");
-
-      await financialPlatform.connect(user3).createTransaction(
-        await user2.getAddress(),
-        ethers.parseEther("500"),
-        "Transaction 2"
-      );
-      await financialPlatform.connect(user3).requestApproval(2, "Approval 2");
-
-      // Process one approval
-      await financialPlatform.connect(approver1).processApproval(1, true, "Approved");
+      // Create transactions and request approvals using a loop
+      const approvalInfos = [
+        {
+          from: user2,
+          to: user3,
+          amount: ethers.parseEther("1000"),
+          desc: "Transaction 1",
+          requester: user2,
+          reason: "Approval 1",
+          id: 1,
+        },
+        {
+          from: user3,
+          to: user2,
+          amount: ethers.parseEther("500"),
+          desc: "Transaction 2",
+          requester: user3,
+          reason: "Approval 2",
+          id: 2,
+        },
+      ];
+      for (const info of approvalInfos) {
+        await createTransaction(
+          financialPlatform,
+          info.from,
+          info.to,
+          info.amount,
+          info.desc
+        );
+        await financialPlatform
+          .connect(info.requester)
+          .requestApproval(info.id, info.reason);
+      }
+      await financialPlatform
+        .connect(approver1)
+        .processApproval(1, true, "Approved");
     });
 
     it("Should get pending approvals correctly", async function () {
@@ -303,22 +406,32 @@ describe("FinancialPlatform", function () {
     });
   });
 
+  // --- Events ---
   describe("Events", function () {
     it("Should emit TransactionCreated event", async function () {
       await expect(
-        financialPlatform.connect(user2).createTransaction(
-          await user3.getAddress(),
-          ethers.parseEther("1000"),
-          "Test transaction"
-        )
+        financialPlatform
+          .connect(user2)
+          .createTransaction(
+            await user3.getAddress(),
+            ethers.parseEther("1000"),
+            "Test transaction"
+          )
       )
         .to.emit(financialPlatform, "TransactionCreated")
-        .withArgs(1, await user2.getAddress(), await user3.getAddress(), ethers.parseEther("1000"));
+        .withArgs(
+          1,
+          await user2.getAddress(),
+          await user3.getAddress(),
+          ethers.parseEther("1000")
+        );
     });
 
     it("Should emit ApprovalRequested event", async function () {
-      await financialPlatform.connect(user2).createTransaction(
-        await user3.getAddress(),
+      await createTransaction(
+        financialPlatform,
+        user2,
+        user3,
         ethers.parseEther("1000"),
         "Test transaction"
       );
@@ -331,18 +444,24 @@ describe("FinancialPlatform", function () {
     });
 
     it("Should emit ApprovalProcessed event", async function () {
-      await financialPlatform.connect(user2).createTransaction(
-        await user3.getAddress(),
+      await createTransaction(
+        financialPlatform,
+        user2,
+        user3,
         ethers.parseEther("1000"),
         "Test transaction"
       );
-      await financialPlatform.connect(user2).requestApproval(1, "Need approval");
+      await financialPlatform
+        .connect(user2)
+        .requestApproval(1, "Need approval");
 
       await expect(
-        financialPlatform.connect(approver1).processApproval(1, true, "Approved")
+        financialPlatform
+          .connect(approver1)
+          .processApproval(1, true, "Approved")
       )
         .to.emit(financialPlatform, "ApprovalProcessed")
         .withArgs(1, 1, await approver1.getAddress());
     });
   });
-}); 
+});

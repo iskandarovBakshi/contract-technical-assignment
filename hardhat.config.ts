@@ -1,7 +1,10 @@
-require("@nomicfoundation/hardhat-toolbox");
-const dotenv = require("dotenv");
+import "@typechain/hardhat";
+import "@nomicfoundation/hardhat-toolbox";
+import dotenv from "dotenv";
 
 dotenv.config();
+
+const signers = JSON.parse(process.env.PRIVATE_KEYS ?? "[]");
 
 const config = {
   solidity: {
@@ -16,8 +19,10 @@ const config = {
   },
   networks: {
     holesky: {
-      url: process.env.HOLESKY_RPC_URL || "https://ethereum-holesky.publicnode.com",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      url:
+        process.env.HOLESKY_RPC_URL ||
+        "https://ethereum-holesky.publicnode.com",
+      accounts: signers,
       chainId: 17000,
       timeout: 120000, // 2 minutes timeout
       gasPrice: "auto",
